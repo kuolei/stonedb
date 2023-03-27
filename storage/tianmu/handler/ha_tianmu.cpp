@@ -748,13 +748,15 @@ int ha_tianmu::index_read([[maybe_unused]] uchar *buf, [[maybe_unused]] const uc
     table->status = STATUS_NOT_FOUND;
     auto index = ha_tianmu_engine_->GetTableIndex(table_name_);
     if (index && (active_index == table_share->primary_key)) {
+      auto tab = ha_tianmu_engine_->GetTableRD(table_name_);
       std::vector<std::string> keys;
-      key_convert(key, key_len, index->KeyCols(), keys);
-      // support equality fullkey lookup over primary key, using full tuple
+      tab->GetKeys(table, keys, index);
+
       if (find_flag == HA_READ_KEY_EXACT) {
         uint64_t rowid;
         if (index->GetRowByKey(current_txn_, keys, rowid) == common::ErrorCode::SUCCESS) {
-          rc = fill_row_by_id(buf, rowid);
+          current_position_ = rowid;
+          rc = 0;
         }
         if (!rc)
           table->status = 0;
@@ -763,8 +765,10 @@ int ha_tianmu::index_read([[maybe_unused]] uchar *buf, [[maybe_unused]] const uc
         common::Operator op = (find_flag == HA_READ_AFTER_KEY) ? common::Operator::O_MORE : common::Operator::O_MORE_EQ;
         iter->ScanToKey(index, keys, op);
         uint64_t rowid;
-        iter->GetRowid(rowid);
-        rc = fill_row_by_id(buf, rowid);
+        if (iter->GetRowid(rowid) == common::ErrorCode::SUCCESS) {
+          current_position_ = rowid;
+          rc = 0;
+        }
         if (!rc)
           table->status = 0;
       } else {
@@ -2378,6 +2382,10 @@ static MYSQL_SYSVAR_UINT(insert_max_buffered, tianmu_sysvar_insert_max_buffered,
 static MYSQL_SYSVAR_BOOL(compensation_start, tianmu_sysvar_compensation_start, PLUGIN_VAR_BOOL, "-", nullptr, nullptr,
                          FALSE);
 static MYSQL_SYSVAR_STR(hugefiledir, tianmu_sysvar_hugefiledir, PLUGIN_VAR_READONLY, "-", nullptr, nullptr, "");
+static MYSQL_SYSVAR_UINT(os_least_mem, tianmu_os_least_mem, PLUGIN_VAR_READONLY, "-", nullptr, nullptr, 1, 0,
+                         UINT32_MAX, 0);
+static MYSQL_SYSVAR_UINT(hugefilesize, tianmu_sysvar_hugefilesize, PLUGIN_VAR_READONLY, "-", nullptr, nullptr, 1, 0,
+                         UINT32_MAX, 0);
 static MYSQL_SYSVAR_UINT(cachinglevel, tianmu_sysvar_cachinglevel, PLUGIN_VAR_READONLY, "-", nullptr, nullptr, 1, 0,
                          512, 0);
 static MYSQL_SYSVAR_STR(mm_policy, tianmu_sysvar_mm_policy, PLUGIN_VAR_READONLY, "-", nullptr, nullptr, "");
@@ -2561,6 +2569,8 @@ static struct st_mysql_sys_var *tianmu_showvars[] = {MYSQL_SYSVAR(bg_load_thread
                                                      MYSQL_SYSVAR(groupby_parallel_rows_minimum),
                                                      MYSQL_SYSVAR(slow_query_record_interval),
                                                      MYSQL_SYSVAR(hugefiledir),
+                                                     MYSQL_SYSVAR(hugefilesize),
+                                                     MYSQL_SYSVAR(os_least_mem),
                                                      MYSQL_SYSVAR(index_cache_size),
                                                      MYSQL_SYSVAR(index_search),
                                                      MYSQL_SYSVAR(enable_rowstore),
